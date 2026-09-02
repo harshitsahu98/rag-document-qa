@@ -7,3 +7,4 @@ pypdf
 langchain-community
 langchain-text-splitters
 python-multipart
+psycopg2-binary>=2.9.9
