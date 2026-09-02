@@ -1,5 +1,6 @@
-from celery import Celery
+import ssl
 
+from celery import Celery
 from app.core.config import REDIS_URL
 
 
@@ -16,6 +17,14 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+
+    broker_use_ssl={
+        "ssl_cert_reqs": ssl.CERT_REQUIRED,
+    },
+
+    redis_backend_use_ssl={
+        "ssl_cert_reqs": ssl.CERT_REQUIRED,
+    },
 
     imports=(
         "app.tasks.test_task",
