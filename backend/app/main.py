@@ -1,9 +1,4 @@
-import os
 import uuid
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from fastapi import (
     Depends,
@@ -12,11 +7,22 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
-from fastapi.middleware.cors import CORSMiddleware
+
+from fastapi.middleware.cors import (
+    CORSMiddleware,
+)
+
 from sqlalchemy.orm import Session
 
-from app.db.database import SessionLocal, get_db
-from app.models.document import Document
+
+from app.db.database import (
+    get_db,
+)
+
+from app.models.document import (
+    Document,
+)
+
 
 from app.services.document_db_service import (
     delete_document_record,
@@ -24,19 +30,12 @@ from app.services.document_db_service import (
     get_document_by_id,
 )
 
-from app.services.document_service import (
-    extract_pdf_text,
-    split_documents,
-)
 
 from app.services.embedding_service import (
     embed_query_with_retry,
     llm,
 )
 
-from app.services.ingestion_service import (
-    ingest_chunks,
-)
 
 from app.services.qdrant_service import (
     client,
@@ -45,7 +44,21 @@ from app.services.qdrant_service import (
     search_documents,
     search_documents_mmr,
 )
-from app.tasks.document_tasks import process_document
+
+
+from app.services.supabase_service import (
+    supabase,
+)
+
+
+from app.tasks.document_tasks import (
+    process_document,
+)
+
+
+# --------------------------------------------------
+# APP
+# --------------------------------------------------
 
 app = FastAPI()
 
@@ -96,7 +109,10 @@ def qdrant_health():
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Qdrant connection failed: {str(error)}",
+            detail=(
+                "Qdrant connection failed: "
+                f"{str(error)}"
+            ),
         )
 
 
@@ -124,63 +140,99 @@ def create_qdrant_collection():
 
 
 # --------------------------------------------------
-# DEBUG SEARCH
-# --------------------------------------------------
-
-@app.get("/documents/search")
-def search_documents_endpoint(
-    query: str,
-):
-    query_vector = embed_query_with_retry(
-    query
-)
-
-    results = search_documents(
-        query_vector=query_vector,
-        limit=3,
-    )
-
-    return {
-        "query": query,
-        "results": [
-            {
-                "score": point.score,
-                "text": point.payload.get(
-                    "text",
-                    "",
-                ),
-            }
-            for point in results
-        ],
-    }
-
-
-# --------------------------------------------------
 # RESPONSE TEXT EXTRACTION
 # --------------------------------------------------
 
-def extract_answer_content(content):
-    if isinstance(content, str):
+def extract_answer_content(
+    content,
+):
+    if content is None:
+        return ""
+
+    if isinstance(
+        content,
+        str,
+    ):
         return content.strip()
 
-    if isinstance(content, list):
+    if isinstance(
+        content,
+        list,
+    ):
         text_parts = []
 
         for item in content:
-            if isinstance(item, str):
-                text_parts.append(item)
 
-            elif isinstance(item, dict):
-                if item.get("text"):
+            if isinstance(
+                item,
+                str,
+            ):
+                text_parts.append(
+                    item
+                )
+
+            elif isinstance(
+                item,
+                dict,
+            ):
+                text = item.get(
+                    "text"
+                )
+
+                if text:
                     text_parts.append(
-                        str(item.get("text"))
+                        str(text)
                     )
 
         return "".join(
             text_parts
         ).strip()
 
-    return str(content).strip()
+    return str(
+        content
+    ).strip()
+
+
+# --------------------------------------------------
+# DEBUG SEARCH
+# --------------------------------------------------
+
+@app.get("/documents/search")
+def search_documents_endpoint(
+    query: str,
+    document_id: str | None = None,
+):
+    query_vector = embed_query_with_retry(
+        query
+    )
+
+    results = search_documents(
+        query_vector=query_vector,
+        limit=10,
+        document_id=document_id,
+    )
+
+    return {
+        "query": query,
+        "document_id": document_id,
+        "number_of_results": len(
+            results
+        ),
+        "results": [
+            {
+                "id": str(
+                    point.id
+                ),
+                "score": point.score,
+                "text": point.payload.get(
+                    "text",
+                    "",
+                ),
+                "payload": point.payload,
+            }
+            for point in results
+        ],
+    }
 
 
 # --------------------------------------------------
@@ -193,15 +245,22 @@ def chat(
     document_id: str,
 ):
     # ----------------------------------------------
-    # 1. Convert question into embedding
+    # 1. Verify document exists
+    # ----------------------------------------------
+
+    # This confirms that the supplied document ID
+    # is a valid document in PostgreSQL.
+
+    # ----------------------------------------------
+    # 2. Embed query
     # ----------------------------------------------
 
     query_vector = embed_query_with_retry(
-    query
-)
+        query
+    )
 
     # ----------------------------------------------
-    # 2. Search only selected document
+    # 3. Search Qdrant
     # ----------------------------------------------
 
     results = search_documents_mmr(
@@ -212,20 +271,59 @@ def chat(
         document_id=document_id,
     )
 
-    # ----------------------------------------------
-    # 3. Remove weak results
-    # ----------------------------------------------
+    print(
+        "\n========== RAG DEBUG =========="
+    )
 
-    SCORE_THRESHOLD = 0.50
+    print(
+        "QUESTION:",
+        query
+    )
 
-    results = [
-        point
-        for point in results
-        if point.score >= SCORE_THRESHOLD
-    ]
+    print(
+        "DOCUMENT ID:",
+        document_id
+    )
+
+    print(
+        "RESULT COUNT:",
+        len(results)
+    )
+
+    for index, point in enumerate(
+        results,
+        start=1,
+    ):
+        print(
+            f"\nRESULT {index}"
+        )
+
+        print(
+            "Score:",
+            point.score
+        )
+
+        print(
+            "Point document_id:",
+            point.payload.get(
+                "document_id"
+            )
+        )
+
+        print(
+            "Text:",
+            point.payload.get(
+                "text",
+                "",
+            )[:300]
+        )
+
+    print(
+        "\n================================\n"
+    )
 
     # ----------------------------------------------
-    # 4. Handle no relevant results
+    # 4. No results
     # ----------------------------------------------
 
     if not results:
@@ -233,23 +331,14 @@ def chat(
             "question": query,
             "document_id": document_id,
             "answer": (
-                "I don't know based on the provided "
-                "documents."
+                "I don't know based on the "
+                "provided documents."
             ),
             "sources": [],
         }
 
     # ----------------------------------------------
     # 5. Build context
-    #
-    # Supports both:
-    #
-    # - parent-child chunking
-    # - normal chunks
-    #
-    # Your current Qdrant data may not contain
-    # parent_id / parent_text, so we fall back
-    # to the normal chunk text.
     # ----------------------------------------------
 
     context_sections = []
@@ -260,34 +349,43 @@ def chat(
         results,
         start=1,
     ):
-        text = point.payload.get(
-            "parent_text"
-        )
-
-        if not text:
-            text = point.payload.get(
+        text = (
+            point.payload.get(
+                "parent_text"
+            )
+            or point.payload.get(
                 "text",
                 "",
             )
+        )
 
         if not text:
             continue
 
         normalized_text = (
-            text.strip().lower()
+            text
+            .strip()
+            .lower()
         )
 
-        # Avoid duplicate context
-        if normalized_text in seen_texts:
+        if (
+            normalized_text
+            in seen_texts
+        ):
             continue
 
         seen_texts.add(
             normalized_text
         )
 
-        filename = point.payload.get(
-            "filename",
-            "Unknown document",
+        filename = (
+            point.payload.get(
+                "filename"
+            )
+            or point.payload.get(
+                "source"
+            )
+            or "Unknown document"
         )
 
         page = point.payload.get(
@@ -298,6 +396,7 @@ def chat(
         context_sections.append(
             f"""
 --- SOURCE {index} ---
+
 Document: {filename}
 Page: {page}
 
@@ -309,66 +408,64 @@ Page: {page}
         context_sections
     )
 
-    # Final safety fallback
+    # ----------------------------------------------
+    # 6. Empty context
+    # ----------------------------------------------
+
     if not context.strip():
         return {
             "question": query,
             "document_id": document_id,
             "answer": (
-                "I don't know based on the provided "
-                "documents."
+                "I don't know based on the "
+                "provided documents."
             ),
             "sources": [],
         }
 
     # ----------------------------------------------
-    # 6. Generalized RAG prompt
+    # 7. Prompt
     # ----------------------------------------------
 
     prompt = f"""
 You are a helpful document question-answering assistant.
 
-Answer the user's question using ONLY the provided document context.
+Answer the user's question using ONLY the document
+context below.
 
-IMPORTANT RULES:
+RULES:
 
-1. The document context may contain direct answers, lists, tables,
-   headings, bullet points, or information spread across multiple
-   retrieved sources.
+1. Answer the question directly when the information
+is present in the document context.
 
-2. If the answer is explicitly present in the context, answer it
-   directly. Do NOT say that you don't know when the requested
-   information is clearly present.
+2. The answer may be spread across multiple chunks.
+Combine those chunks when appropriate.
 
-3. Combine information from multiple retrieved sources when doing so
-   helps answer the user's question and the sources are clearly relevant.
+3. Headings, bullet points, tables, and sections are
+all valid sources of information.
 
-4. Keep distinct topics, entities, projects, people, or sections
-   separate unless the context clearly establishes a relationship
-   between them.
+4. Do not use outside knowledge.
 
-5. Do not infer relationships merely because pieces of information
-   appear close together in the retrieved text.
+5. Do not invent information.
 
-6. Do not invent information, add unsupported details, or use outside
-   knowledge.
-
-7. If the answer is not supported anywhere in the provided document
-   context, say exactly:
+6. Only say the following sentence when the answer
+cannot be found in the provided context:
 
 "I don't know based on the provided documents."
 
-Answer clearly and concisely.
-
 DOCUMENT CONTEXT:
+
 {context}
 
 USER QUESTION:
+
 {query}
+
+ANSWER:
 """
 
     # ----------------------------------------------
-    # 7. Generate answer
+    # 8. Generate answer
     # ----------------------------------------------
 
     try:
@@ -382,18 +479,18 @@ USER QUESTION:
 
         if not answer:
             answer = (
-                "I don't know based on the provided "
-                "documents."
+                "I don't know based on the "
+                "provided documents."
             )
 
-    except HTTPException:
-        raise
-
     except Exception as error:
-        error_message = str(error)
+
+        error_message = str(
+            error
+        )
 
         print(
-            "LLM error:",
+            "LLM ERROR:",
             error_message,
         )
 
@@ -418,12 +515,13 @@ USER QUESTION:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Failed to generate an AI response."
+                "Failed to generate an AI "
+                "response."
             ),
         )
 
     # ----------------------------------------------
-    # 8. Return answer and sources
+    # 9. Return response
     # ----------------------------------------------
 
     return {
@@ -432,17 +530,27 @@ USER QUESTION:
         "answer": answer,
         "sources": [
             {
+                "id": str(
+                    point.id
+                ),
                 "score": point.score,
-                "text": point.payload.get(
-                    "parent_text",
+                "text": (
                     point.payload.get(
+                        "parent_text"
+                    )
+                    or point.payload.get(
                         "text",
                         "",
-                    ),
+                    )
                 ),
-                "filename": point.payload.get(
-                    "filename",
-                    "Unknown document",
+                "filename": (
+                    point.payload.get(
+                        "filename"
+                    )
+                    or point.payload.get(
+                        "source"
+                    )
+                    or "Unknown document"
                 ),
                 "page": point.payload.get(
                     "page",
@@ -453,6 +561,7 @@ USER QUESTION:
         ],
     }
 
+
 # --------------------------------------------------
 # UPLOAD DOCUMENT
 # --------------------------------------------------
@@ -460,66 +569,116 @@ USER QUESTION:
 @app.post("/documents/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
 ):
-    # Validate PDF
-    if file.content_type != "application/pdf":
+    if (
+        file.content_type
+        != "application/pdf"
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Only PDF files are allowed.",
+            detail=(
+                "Only PDF files are allowed."
+            ),
         )
 
-    document_id = str(uuid.uuid4())
-
-    filename = file.filename or "document.pdf"
-
-    # Create uploads directory
-    os.makedirs(
-        "uploads",
-        exist_ok=True,
+    document_id = str(
+        uuid.uuid4()
     )
 
-    file_path = os.path.join(
-        "uploads",
-        f"{document_id}.pdf",
+    filename = (
+        file.filename
+        or "document.pdf"
     )
 
-    # Save uploaded file
-    with open(file_path, "wb") as buffer:
-        buffer.write(
-            await file.read()
+    storage_path = (
+        f"{document_id}/{filename}"
+    )
+
+    try:
+        file_content = await file.read()
+
+        supabase.storage.from_(
+            "documents"
+        ).upload(
+            path=storage_path,
+            file=file_content,
+            file_options={
+                "content-type":
+                "application/pdf",
+            },
         )
 
-    # Create database record
-    document = Document(
-        id=document_id,
-        filename=filename,
-        file_path=file_path,
-        status="processing",
-        pages=0,
-        chunks=0,
-    )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to upload PDF: "
+                f"{str(error)}"
+            ),
+        )
 
-    db.add(document)
-    db.commit()
+    try:
+        document = Document(
+            id=document_id,
+            filename=filename,
+            file_path=storage_path,
+            status="processing",
+            pages=0,
+            chunks=0,
+        )
 
-    # Send processing to Celery
-    task = process_document.delay(
-        file_path=file_path,
-        document_id=document_id,
-        filename=filename,
-    )
+        db.add(
+            document
+        )
 
-    return {
-        "message": (
-            "PDF uploaded successfully. "
-            "Processing started."
-        ),
-        "document_id": document_id,
-        "filename": filename,
-        "task_id": task.id,
-        "status": "processing",
-    }
+        db.commit()
+
+        db.refresh(
+            document
+        )
+
+        task = process_document.delay(
+            storage_path=storage_path,
+            document_id=document_id,
+            filename=filename,
+        )
+
+        return {
+            "message": (
+                "PDF uploaded successfully. "
+                "Processing started."
+            ),
+            "document_id": document_id,
+            "filename": filename,
+            "storage_path": storage_path,
+            "task_id": task.id,
+            "status": "processing",
+        }
+
+    except Exception as error:
+
+        db.rollback()
+
+        try:
+            supabase.storage.from_(
+                "documents"
+            ).remove(
+                [storage_path]
+            )
+
+        except Exception:
+            pass
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to start document "
+                f"processing: {str(error)}"
+            ),
+        )
 
 
 # --------------------------------------------------
@@ -528,7 +687,9 @@ async def upload_document(
 
 @app.get("/documents")
 def get_documents(
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
 ):
     documents = get_all_documents(
         db
@@ -537,14 +698,24 @@ def get_documents(
     return {
         "documents": [
             {
-                "id": str(document.id),
-                "filename": document.filename,
+                "id": str(
+                    document.id
+                ),
+                "filename": (
+                    document.filename
+                ),
                 "file_path": (
                     document.file_path
                 ),
-                "status": document.status,
-                "pages": document.pages,
-                "chunks": document.chunks,
+                "status": (
+                    document.status
+                ),
+                "pages": (
+                    document.pages
+                ),
+                "chunks": (
+                    document.chunks
+                ),
                 "created_at": (
                     document.created_at
                 ),
@@ -558,10 +729,14 @@ def get_documents(
 # GET SINGLE DOCUMENT
 # --------------------------------------------------
 
-@app.get("/documents/{document_id}")
+@app.get(
+    "/documents/{document_id}"
+)
 def get_document(
     document_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
 ):
     document = get_document_by_id(
         db=db,
@@ -575,12 +750,27 @@ def get_document(
         )
 
     return {
-        "id": str(document.id),
-        "filename": document.filename,
-        "status": document.status,
-        "pages": document.pages,
-        "chunks": document.chunks,
-        "created_at": document.created_at,
+        "id": str(
+            document.id
+        ),
+        "filename": (
+            document.filename
+        ),
+        "file_path": (
+            document.file_path
+        ),
+        "status": (
+            document.status
+        ),
+        "pages": (
+            document.pages
+        ),
+        "chunks": (
+            document.chunks
+        ),
+        "created_at": (
+            document.created_at
+        ),
     }
 
 
@@ -588,16 +778,20 @@ def get_document(
 # DELETE DOCUMENT
 # --------------------------------------------------
 
-@app.delete("/documents/{document_id}")
+@app.delete(
+    "/documents/{document_id}"
+)
 def delete_document(
     document_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(
+        get_db
+    ),
 ):
-    # 1. Find document
     document = (
         db.query(Document)
         .filter(
-            Document.id == document_id
+            Document.id
+            == document_id
         )
         .first()
     )
@@ -608,30 +802,29 @@ def delete_document(
             detail="Document not found",
         )
 
-    file_path = document.file_path
+    storage_path = (
+        document.file_path
+    )
 
     try:
-        # 2. Delete Qdrant vectors
+        # Delete Qdrant points
         delete_document_chunks(
             document_id
         )
 
-        # 3. Delete PostgreSQL record
+        # Delete Supabase file
+        if storage_path:
+            supabase.storage.from_(
+                "documents"
+            ).remove(
+                [storage_path]
+            )
+
+        # Delete PostgreSQL record
         delete_document_record(
             db=db,
             document_id=document_id,
         )
-
-        # 4. Delete physical PDF
-        if (
-            file_path
-            and os.path.exists(
-                file_path
-            )
-        ):
-            os.remove(
-                file_path
-            )
 
         return {
             "message": (
@@ -641,7 +834,110 @@ def delete_document(
         }
 
     except Exception as error:
+
+        db.rollback()
+
         raise HTTPException(
             status_code=500,
-            detail=str(error),
+            detail=str(
+                error
+            ),
         )
+
+
+# --------------------------------------------------
+# DEBUG QDRANT
+# --------------------------------------------------
+
+@app.get("/debug/qdrant")
+def debug_qdrant():
+    points, _ = client.scroll(
+        collection_name="document_chunks",
+        limit=100,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    return {
+        "number_of_points": len(
+            points
+        ),
+        "points": [
+            {
+                "id": str(
+                    point.id
+                ),
+                "document_id": (
+                    point.payload.get(
+                        "document_id"
+                    )
+                ),
+                "text": (
+                    point.payload.get(
+                        "text",
+                        ""
+                    )[:500]
+                ),
+                "filename": (
+                    point.payload.get(
+                        "filename"
+                    )
+                ),
+                "source": (
+                    point.payload.get(
+                        "source"
+                    )
+                ),
+                "page": (
+                    point.payload.get(
+                        "page"
+                    )
+                ),
+                "chunk_index": (
+                    point.payload.get(
+                        "chunk_index"
+                    )
+                ),
+            }
+            for point in points
+        ],
+    }
+    
+@app.get("/debug/document-points")
+def debug_document_points(
+    document_id: str,
+):
+    from qdrant_client.models import (
+        Filter,
+        FieldCondition,
+        MatchValue,
+    )
+
+    points, _ = client.scroll(
+        collection_name="document_chunks",
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(
+                        value=document_id
+                    ),
+                )
+            ]
+        ),
+        limit=100,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    return {
+        "document_id": document_id,
+        "number_of_points": len(points),
+        "points": [
+            {
+                "id": str(point.id),
+                "payload": point.payload,
+            }
+            for point in points
+        ],
+    }

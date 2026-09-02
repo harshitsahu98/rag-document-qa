@@ -52,3 +52,15 @@ GROQ_MODEL = os.getenv(
 QDRANT_API_KEY = os.getenv(
     "QDRANT_API_KEY"
 )
+
+SUPABASE_URL = get_required_env(
+    "SUPABASE_URL"
+)
+
+SUPABASE_KEY = get_required_env(
+    "SUPABASE_KEY"
+)
+
+SUPABASE_BUCKET = get_required_env(
+    "SUPABASE_BUCKET"
+)

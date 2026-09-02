@@ -18,9 +18,9 @@ from app.core.config import (
 )
 
 
-# Connect to Qdrant
-# API key is used automatically when deploying to Qdrant Cloud.
-# Locally, QDRANT_API_KEY can remain empty.
+# --------------------------------------------------
+# QDRANT CLIENT
+# --------------------------------------------------
 
 if QDRANT_API_KEY:
     client = QdrantClient(
@@ -33,9 +33,17 @@ else:
     )
 
 
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
+
 COLLECTION_NAME = "document_chunks"
 VECTOR_SIZE = 3072
 
+
+# --------------------------------------------------
+# CREATE COLLECTION
+# --------------------------------------------------
 
 def create_collection():
     if client.collection_exists(
@@ -52,6 +60,10 @@ def create_collection():
     )
 
 
+# --------------------------------------------------
+# INSERT SINGLE DOCUMENT CHUNK
+# --------------------------------------------------
+
 def insert_document(
     point_id: str,
     text: str,
@@ -63,7 +75,9 @@ def insert_document(
     }
 
     if metadata:
-        payload.update(metadata)
+        payload.update(
+            metadata
+        )
 
     client.upsert(
         collection_name=COLLECTION_NAME,
@@ -74,8 +88,30 @@ def insert_document(
                 payload=payload,
             )
         ],
+        wait=True,
     )
 
+
+# --------------------------------------------------
+# INSERT DOCUMENTS IN BATCH
+# --------------------------------------------------
+
+def insert_documents_batch(
+    points: list[PointStruct],
+):
+    if not points:
+        return
+
+    client.upsert(
+        collection_name=COLLECTION_NAME,
+        points=points,
+        wait=True,
+    )
+
+
+# --------------------------------------------------
+# DOCUMENT FILTER
+# --------------------------------------------------
 
 def get_document_filter(
     document_id: str | None = None,
@@ -88,12 +124,16 @@ def get_document_filter(
             FieldCondition(
                 key="document_id",
                 match=MatchValue(
-                    value=document_id
+                    value=str(document_id)
                 ),
             )
         ]
     )
 
+
+# --------------------------------------------------
+# NORMAL SEARCH
+# --------------------------------------------------
 
 def search_documents(
     query_vector: list[float],
@@ -110,17 +150,29 @@ def search_documents(
         query_filter=query_filter,
         limit=limit,
         with_payload=True,
+        with_vectors=False,
     )
 
     return results.points
 
 
+# --------------------------------------------------
+# COSINE SIMILARITY
+# --------------------------------------------------
+
 def cosine_similarity(
     vector_a,
     vector_b,
 ):
-    vector_a = np.array(vector_a)
-    vector_b = np.array(vector_b)
+    vector_a = np.array(
+        vector_a,
+        dtype=np.float32,
+    )
+
+    vector_b = np.array(
+        vector_b,
+        dtype=np.float32,
+    )
 
     denominator = (
         np.linalg.norm(vector_a)
@@ -128,19 +180,26 @@ def cosine_similarity(
     )
 
     if denominator == 0:
-        return 0
+        return 0.0
 
-    return np.dot(
-        vector_a,
-        vector_b,
-    ) / denominator
+    return float(
+        np.dot(
+            vector_a,
+            vector_b,
+        )
+        / denominator
+    )
 
+
+# --------------------------------------------------
+# MMR SEARCH
+# --------------------------------------------------
 
 def search_documents_mmr(
     query_vector: list[float],
-    limit: int = 3,
-    fetch_limit: int = 10,
-    lambda_mult: float = 0.7,
+    limit: int = 6,
+    fetch_limit: int = 20,
+    lambda_mult: float = 0.75,
     document_id: str | None = None,
 ):
     query_filter = get_document_filter(
@@ -170,16 +229,13 @@ def search_documents_mmr(
         and candidates
     ):
         best_candidate = None
-        best_score = float("-inf")
+        best_mmr_score = float("-inf")
 
         for candidate in candidates:
 
-            relevance_score = (
-                cosine_similarity(
-                    query_vector,
-                    candidate.vector,
-                )
-            )
+            # Qdrant already calculates
+            # query relevance score.
+            relevance_score = candidate.score
 
             if selected:
                 max_similarity = max(
@@ -190,7 +246,7 @@ def search_documents_mmr(
                     for selected_point in selected
                 )
             else:
-                max_similarity = 0
+                max_similarity = 0.0
 
             mmr_score = (
                 lambda_mult
@@ -201,10 +257,13 @@ def search_documents_mmr(
 
             if (
                 mmr_score
-                > best_score
+                > best_mmr_score
             ):
-                best_score = mmr_score
+                best_mmr_score = mmr_score
                 best_candidate = candidate
+
+        if best_candidate is None:
+            break
 
         selected.append(
             best_candidate
@@ -217,6 +276,10 @@ def search_documents_mmr(
     return selected
 
 
+# --------------------------------------------------
+# DELETE DOCUMENT CHUNKS
+# --------------------------------------------------
+
 def delete_document_chunks(
     document_id: str,
 ):
@@ -228,27 +291,11 @@ def delete_document_chunks(
                     FieldCondition(
                         key="document_id",
                         match=MatchValue(
-                            value=document_id
+                            value=str(document_id)
                         ),
                     )
                 ]
             )
         ),
-    )
-    
-def insert_documents_batch(
-    points: list[PointStruct],
-):
-    """
-    Insert multiple vectors into Qdrant
-    in a single request.
-    """
-
-    if not points:
-        return
-
-    client.upsert(
-        collection_name=COLLECTION_NAME,
-        points=points,
         wait=True,
     )
