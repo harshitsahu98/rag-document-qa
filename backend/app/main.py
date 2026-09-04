@@ -14,8 +14,9 @@ from fastapi.middleware.cors import (
 
 from sqlalchemy.orm import Session
 
-
 from app.db.database import (
+    Base,
+    engine,
     get_db,
 )
 
@@ -23,19 +24,16 @@ from app.models.document import (
     Document,
 )
 
-
 from app.services.document_db_service import (
     delete_document_record,
     get_all_documents,
     get_document_by_id,
 )
 
-
 from app.services.embedding_service import (
     embed_query_with_retry,
     llm,
 )
-
 
 from app.services.qdrant_service import (
     client,
@@ -45,11 +43,9 @@ from app.services.qdrant_service import (
     search_documents_mmr,
 )
 
-
 from app.services.supabase_service import (
     supabase,
 )
-
 
 from app.tasks.document_tasks import (
     process_document,
@@ -61,6 +57,17 @@ from app.tasks.document_tasks import (
 # --------------------------------------------------
 
 app = FastAPI()
+
+
+# --------------------------------------------------
+# DATABASE INITIALIZATION
+# --------------------------------------------------
+
+@app.on_event("startup")
+def create_database_tables():
+    Base.metadata.create_all(
+        bind=engine
+    )
 
 
 # --------------------------------------------------
@@ -144,41 +151,23 @@ def create_qdrant_collection():
 # RESPONSE TEXT EXTRACTION
 # --------------------------------------------------
 
-def extract_answer_content(
-    content,
-):
+def extract_answer_content(content):
     if content is None:
         return ""
 
-    if isinstance(
-        content,
-        str,
-    ):
+    if isinstance(content, str):
         return content.strip()
 
-    if isinstance(
-        content,
-        list,
-    ):
+    if isinstance(content, list):
         text_parts = []
 
         for item in content:
 
-            if isinstance(
-                item,
-                str,
-            ):
-                text_parts.append(
-                    item
-                )
+            if isinstance(item, str):
+                text_parts.append(item)
 
-            elif isinstance(
-                item,
-                dict,
-            ):
-                text = item.get(
-                    "text"
-                )
+            elif isinstance(item, dict):
+                text = item.get("text")
 
                 if text:
                     text_parts.append(
@@ -245,24 +234,9 @@ def chat(
     query: str,
     document_id: str,
 ):
-    # ----------------------------------------------
-    # 1. Verify document exists
-    # ----------------------------------------------
-
-    # This confirms that the supplied document ID
-    # is a valid document in PostgreSQL.
-
-    # ----------------------------------------------
-    # 2. Embed query
-    # ----------------------------------------------
-
     query_vector = embed_query_with_retry(
         query
     )
-
-    # ----------------------------------------------
-    # 3. Search Qdrant
-    # ----------------------------------------------
 
     results = search_documents_mmr(
         query_vector=query_vector,
@@ -323,9 +297,9 @@ def chat(
         "\n================================\n"
     )
 
-    # ----------------------------------------------
-    # 4. No results
-    # ----------------------------------------------
+    # --------------------------------------------------
+    # NO RESULTS
+    # --------------------------------------------------
 
     if not results:
         return {
@@ -338,9 +312,9 @@ def chat(
             "sources": [],
         }
 
-    # ----------------------------------------------
-    # 5. Build context
-    # ----------------------------------------------
+    # --------------------------------------------------
+    # BUILD CONTEXT
+    # --------------------------------------------------
 
     context_sections = []
 
@@ -409,9 +383,9 @@ Page: {page}
         context_sections
     )
 
-    # ----------------------------------------------
-    # 6. Empty context
-    # ----------------------------------------------
+    # --------------------------------------------------
+    # EMPTY CONTEXT
+    # --------------------------------------------------
 
     if not context.strip():
         return {
@@ -424,9 +398,9 @@ Page: {page}
             "sources": [],
         }
 
-    # ----------------------------------------------
-    # 7. Prompt
-    # ----------------------------------------------
+    # --------------------------------------------------
+    # PROMPT
+    # --------------------------------------------------
 
     prompt = f"""
 You are a helpful document question-answering assistant.
@@ -465,9 +439,9 @@ USER QUESTION:
 ANSWER:
 """
 
-    # ----------------------------------------------
-    # 8. Generate answer
-    # ----------------------------------------------
+    # --------------------------------------------------
+    # GENERATE ANSWER
+    # --------------------------------------------------
 
     try:
         response = llm.invoke(
@@ -521,9 +495,9 @@ ANSWER:
             ),
         )
 
-    # ----------------------------------------------
-    # 9. Return response
-    # ----------------------------------------------
+    # --------------------------------------------------
+    # RETURN RESPONSE
+    # --------------------------------------------------
 
     return {
         "question": query,
@@ -808,12 +782,10 @@ def delete_document(
     )
 
     try:
-        # Delete Qdrant points
         delete_document_chunks(
             document_id
         )
 
-        # Delete Supabase file
         if storage_path:
             supabase.storage.from_(
                 "documents"
@@ -821,7 +793,6 @@ def delete_document(
                 [storage_path]
             )
 
-        # Delete PostgreSQL record
         delete_document_record(
             db=db,
             document_id=document_id,
@@ -903,7 +874,8 @@ def debug_qdrant():
             for point in points
         ],
     }
-    
+
+
 @app.get("/debug/document-points")
 def debug_document_points(
     document_id: str,
