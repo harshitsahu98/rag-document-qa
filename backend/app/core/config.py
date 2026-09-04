@@ -49,9 +49,8 @@ GROQ_MODEL = os.getenv(
 
 
 # Optional environment variables
-QDRANT_API_KEY = os.getenv(
-    "QDRANT_API_KEY"
-)
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 SUPABASE_URL = get_required_env(
     "SUPABASE_URL"
