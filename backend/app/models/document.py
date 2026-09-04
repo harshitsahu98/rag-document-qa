@@ -1,15 +1,21 @@
 import uuid
 
-from sqlalchemy import Column, String, Integer, DateTime
+from sqlalchemy import (
+    Column,
+    String,
+    Integer,
+    DateTime,
+)
+
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base
+
 from sqlalchemy.sql import func
 
-
-Base = declarative_base()
+from app.db.database import Base
 
 
 class Document(Base):
+
     __tablename__ = "documents"
 
     id = Column(
@@ -33,9 +39,15 @@ class Document(Base):
         nullable=False,
     )
 
-    pages = Column(Integer)
+    pages = Column(
+        Integer,
+        default=0,
+    )
 
-    chunks = Column(Integer)
+    chunks = Column(
+        Integer,
+        default=0,
+    )
 
     created_at = Column(
         DateTime,
