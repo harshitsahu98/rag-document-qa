@@ -69,6 +69,8 @@ def create_database_tables():
         bind=engine
     )
 
+    create_collection()
+
 
 # --------------------------------------------------
 # CORS

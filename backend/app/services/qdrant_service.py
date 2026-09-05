@@ -8,6 +8,7 @@ from qdrant_client.models import (
     FieldCondition,
     MatchValue,
     FilterSelector,
+    PayloadSchemaType,
 )
 
 import numpy as np
@@ -42,21 +43,55 @@ VECTOR_SIZE = 3072
 
 
 # --------------------------------------------------
-# CREATE COLLECTION
+# CREATE COLLECTION + PAYLOAD INDEXES
 # --------------------------------------------------
 
 def create_collection():
-    if client.collection_exists(
+
+    # Create collection if it doesn't exist
+    if not client.collection_exists(
         COLLECTION_NAME
     ):
-        return
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(
+                size=VECTOR_SIZE,
+                distance=Distance.COSINE,
+            ),
+        )
 
-    client.create_collection(
+    # --------------------------------------------------
+    # PAYLOAD INDEX: document_id
+    # --------------------------------------------------
+    #
+    # Required because we filter Qdrant searches using:
+    #
+    # document_id = <uuid>
+    #
+    # Without this index Qdrant returns:
+    #
+    # "Index required but not found for document_id"
+    #
+    client.create_payload_index(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(
-            size=VECTOR_SIZE,
-            distance=Distance.COSINE,
-        ),
+        field_name="document_id",
+        field_schema=PayloadSchemaType.UUID,
+    )
+
+    # --------------------------------------------------
+    # PAYLOAD INDEX: parent_id
+    # --------------------------------------------------
+    #
+    # Used for parent-document retrieval.
+    #
+    # Each child chunk can belong to a parent chunk:
+    #
+    # parent_id = UUID
+    #
+    client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="parent_id",
+        field_schema=PayloadSchemaType.UUID,
     )
 
 
@@ -70,6 +105,7 @@ def insert_document(
     vector: list[float],
     metadata: dict | None = None,
 ):
+
     payload = {
         "text": text,
     }
@@ -99,6 +135,7 @@ def insert_document(
 def insert_documents_batch(
     points: list[PointStruct],
 ):
+
     if not points:
         return
 
@@ -116,6 +153,7 @@ def insert_documents_batch(
 def get_document_filter(
     document_id: str | None = None,
 ):
+
     if not document_id:
         return None
 
@@ -140,6 +178,7 @@ def search_documents(
     limit: int = 3,
     document_id: str | None = None,
 ):
+
     query_filter = get_document_filter(
         document_id
     )
@@ -164,6 +203,7 @@ def cosine_similarity(
     vector_a,
     vector_b,
 ):
+
     vector_a = np.array(
         vector_a,
         dtype=np.float32,
@@ -202,6 +242,7 @@ def search_documents_mmr(
     lambda_mult: float = 0.75,
     document_id: str | None = None,
 ):
+
     query_filter = get_document_filter(
         document_id
     )
@@ -228,6 +269,7 @@ def search_documents_mmr(
         len(selected) < limit
         and candidates
     ):
+
         best_candidate = None
         best_mmr_score = float("-inf")
 
@@ -238,6 +280,7 @@ def search_documents_mmr(
             relevance_score = candidate.score
 
             if selected:
+
                 max_similarity = max(
                     cosine_similarity(
                         candidate.vector,
@@ -245,7 +288,9 @@ def search_documents_mmr(
                     )
                     for selected_point in selected
                 )
+
             else:
+
                 max_similarity = 0.0
 
             mmr_score = (
@@ -259,6 +304,7 @@ def search_documents_mmr(
                 mmr_score
                 > best_mmr_score
             ):
+
                 best_mmr_score = mmr_score
                 best_candidate = candidate
 
@@ -283,6 +329,7 @@ def search_documents_mmr(
 def delete_document_chunks(
     document_id: str,
 ):
+
     client.delete(
         collection_name=COLLECTION_NAME,
         points_selector=FilterSelector(
